@@ -62,6 +62,10 @@ class AthanScheduler:
                 logger.info(f"{name}: {t.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
     def run(self):
+        # Initial discovery to list configured speakers on startup
+        logger.info("Performing initial Sonos discovery...")
+        self.sonos.discover_and_group(debug=self.debug)
+
         if self.debug:
             logger.info("DEBUG MODE: Triggering Athan immediately.")
             threading.Thread(target=self.sonos.play, args=(ATHAN_FILENAME, True), daemon=True).start()

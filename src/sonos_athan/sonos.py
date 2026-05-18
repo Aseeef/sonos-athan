@@ -32,28 +32,33 @@ class SonosManager:
 
     def discover_and_group(self, debug=False):
         try:
-            logger.info("Scanning network for Sonos speakers...")
-            all_speakers = soco.discover(timeout=5)
+            logger.info("Scanning network for Sonos speakers via multicast...")
+            all_speakers = soco.discover(timeout=10)
             if not all_speakers:
-                logger.warning("No Sonos speakers found on the network.")
+                logger.warning("No Sonos speakers found.")
                 return False
 
+            potential_speakers = list(all_speakers)
+            
             if debug:
-                logger.info(f"Discovered {len(all_speakers)} potential devices. Fetching info...")
+                logger.info(f"Found {len(potential_speakers)} potential devices. Filtering...")
 
             self.target_speakers = []
-            for s in all_speakers:
+            for s in potential_speakers:
                 try:
                     name = s.player_name
-                    if debug: logger.info(f" - Found: {name} ({s.ip_address})")
+                    # Always log discovered speakers that match configuration
                     if not self.speaker_names or name in self.speaker_names:
+                        logger.info(f" - Configured Speaker: {name} ({s.ip_address})")
                         self.target_speakers.append(s)
+                    elif debug:
+                        logger.info(f" - Found (unconfigured): {name} ({s.ip_address})")
                 except Exception as e:
                     if debug: logger.warning(f" - Error communicating with {s.ip_address}: {e}")
                     continue
 
             if not self.target_speakers:
-                logger.warning(f"None of the target speakers {self.speaker_names} were found.")
+                logger.warning("None of the target speakers were found.")
                 return False
 
             self.target_speakers.sort(key=lambda x: x.ip_address)
@@ -170,7 +175,7 @@ class SonosManager:
                     if debug: logger.warning(f"Could not restore track URI: {e}")
             
             # Restore Transport State
-            state = self.original_state.get('transport_state')
+            state = self.original_state['transport_state']
             if state == 'PLAYING': self.master.play()
             elif state == 'PAUSED': self.master.pause()
             else: self.master.stop()

@@ -40,6 +40,8 @@ The program is fully configurable via environment variables or a `.env` file.
 ### Using Docker (Recommended)
 The easiest way to run SonosAthan is using Docker Compose. Ensure you have `network_mode: host` set to allow Sonos discovery.
 
+> **Note on Rootless Docker/Podman:** This program relies heavily on host networking to discover speakers and handle callbacks. It is not currently designed to work out-of-the-box with Rootless Docker or Podman due to the networking isolation provided by those environments. While it's possible to get it working with additional configuration, the level of isolation wasn't considered necessary for a tool intended strictly for local network use.
+
 1.  **Clone the repository.**
 2.  **Configure your settings** in the `.env` file.
 3.  **Start the container:**
