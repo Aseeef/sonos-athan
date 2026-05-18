@@ -1,0 +1,14 @@
+services:
+  sonos-athan:
+    build: .
+    container_name: sonos-athan
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./audio:/app/audio
+    env_file:
+      - .env
+    # We use host mode, but if the user wants to override 
+    # the server port, they can do so in .env
+    environment:
+      - PYTHONUNBUFFERED=1
