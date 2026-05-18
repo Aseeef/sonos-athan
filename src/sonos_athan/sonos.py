@@ -7,8 +7,13 @@ from .config import logger, SONOS_SPEAKER_NAMES, ATHAN_VOLUME, SERVER_PORT, MANU
 DETECTED_IP = None
 
 def get_local_ip(target_ip=None):
+    """
+    Find the local IP address that can reach the target_ip.
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        # Strategy: Connect to target to find routing interface
+        s.settimeout(2)
         s.connect((target_ip or '1.1.1.1', 80))
         IP = s.getsockname()[0]
     except Exception:
@@ -71,11 +76,21 @@ class SonosManager:
         if not self.master:
             if not self.discover_and_group(debug=debug): return
 
-        callback_ip = MANUAL_IP or DETECTED_IP
+        # Get IP for callback
+        callback_ip = MANUAL_IP
         if not callback_ip:
-            DETECTED_IP = get_local_ip(self.master.ip_address)
+            if not DETECTED_IP:
+                DETECTED_IP = get_local_ip(self.master.ip_address)
+                # Validation check: Ensure auto-detected IP is on the same subnet
+                m_ip = self.master.ip_address
+                if '.'.join(m_ip.split('.')[:-1]) != '.'.join(DETECTED_IP.split('.')[:-1]):
+                    logger.warning(f"!!! NETWORK WARNING !!!")
+                    logger.warning(f"Detected IP {DETECTED_IP} is on a different subnet than Sonos {m_ip}.")
+                    logger.warning(f"Sonos will likely NOT be able to play the audio.")
+                    logger.warning(f"Please set LOCAL_IP manually in your .env file.")
+                else:
+                    logger.info(f"Auto-detected local IP for Sonos callbacks: {DETECTED_IP}")
             callback_ip = DETECTED_IP
-            logger.info(f"Auto-detected local IP: {callback_ip}")
 
         uri = f"http://{callback_ip}:{SERVER_PORT}/{filename}"
         logger.info(f"Playing {uri} on Sonos...")
