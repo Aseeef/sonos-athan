@@ -26,6 +26,7 @@ REMIND_BEFORE_MINUTES = [int(m.strip()) for m in REMIND_BEFORE_MINUTES_STR.split
 # Audio
 ATHAN_AUDIO_URL = os.getenv('ATHAN_AUDIO_URL', 'https://media.assabile.com/assabile/adhan_3435370/6f509ec934a4.mp3')
 FAJR_ATHAN_AUDIO_URL = os.getenv('FAJR_ATHAN_AUDIO_URL', 'https://media.assabile.com/assabile/adhan_3435370/ddb21f7363eb.mp3')
+PLAY_ATHAN_FOR = [p.strip().capitalize() for p in os.getenv('PLAY_ATHAN_FOR', 'Fajr,Dhuhr,Asr,Maghrib,Isha').split(',') if p.strip()]
 SERVER_PORT = int(os.getenv('SERVER_PORT', '8000'))
 AUDIO_DIR = os.getenv('AUDIO_DIR', 'audio')
 

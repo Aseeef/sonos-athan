@@ -7,7 +7,7 @@ from adhanpy.calculation.CalculationParameters import CalculationParameters
 from adhanpy.calculation.Madhab import Madhab
 from adhanpy.PrayerTimes import PrayerTimes
 
-from .config import logger, LATITUDE, LONGITUDE, TIMEZONE, CALCULATION_METHOD, MADHAB, REMIND_BEFORE_MINUTES, ATHAN_FILENAME, FAJR_ATHAN_FILENAME
+from .config import logger, LATITUDE, LONGITUDE, TIMEZONE, CALCULATION_METHOD, MADHAB, REMIND_BEFORE_MINUTES, ATHAN_FILENAME, FAJR_ATHAN_FILENAME, PLAY_ATHAN_FOR
 from .sonos import SonosManager
 from .audio import generate_reminder
 
@@ -104,8 +104,12 @@ class AthanScheduler:
             if self.stop_event.wait(wait_seconds): break
             
             if event_type == "athan":
-                file = FAJR_ATHAN_FILENAME if prayer_name == "Fajr" else ATHAN_FILENAME
-                self.sonos.play(file, debug=self.debug)
+                if prayer_name in PLAY_ATHAN_FOR:
+                    file = FAJR_ATHAN_FILENAME if prayer_name == "Fajr" else ATHAN_FILENAME
+                    self.sonos.play(file, debug=self.debug)
+                else:
+                    msg = f"{prayer_name} prayer time has started"
+                    self.sonos.play(generate_reminder(prayer_name, 0, custom_text=msg), debug=self.debug)
             elif event_type == "announcement":
                 custom_text = next_event[3]
                 self.sonos.play(generate_reminder(prayer_name, 0, custom_text=custom_text), debug=self.debug)

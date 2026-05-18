@@ -24,11 +24,12 @@ The program is fully configurable via environment variables or a `.env` file.
 | `TIMEZONE` | Timezone for calculations and logs (e.g., `Europe/London`) | `America/New_York` |
 | `CALCULATION_METHOD` | Calculation method (e.g., `NORTH_AMERICA`, `UMM_AL_QURA`) | `NORTH_AMERICA` (ISNA) |
 | `MADHAB` | Madhab for Asr calculation (`SHAFI` or `HANAFI`) | `SHAFI` |
+| `PLAY_ATHAN_FOR` | Prayers that should use the full Athan MP3 (comma-separated) | `Fajr,Dhuhr,Asr,Maghrib,Isha` |
 | `REMIND_BEFORE_MINUTES` | Comma-separated minutes for reminders (e.g., `5,15,30`) | `0` (Disabled) |
 | `SONOS_SPEAKER_NAMES` | Comma-separated names of speakers to use (leave empty for all) | (All discovered) |
 | `ATHAN_VOLUME` | Fixed volume level (0-100) for Athan playback | (Original Volume) |
-| `ATHAN_AUDIO_URL` | URL for the regular Athan MP3 | (Makkah Athan) |
-| `FAJR_ATHAN_AUDIO_URL` | URL for the Fajr Athan MP3 | (Fajr Athan) |
+| `ATHAN_AUDIO_URL` | URL for the regular Athan MP3 | (Assabile Makkah) |
+| `FAJR_ATHAN_AUDIO_URL` | URL for the Fajr Athan MP3 | (Assabile Fajr) |
 | `LOCAL_IP` | Manually set host IP if auto-detection fails | (Auto-detected) |
 | `SERVER_PORT` | Port for the built-in HTTP audio server | `8000` |
 
