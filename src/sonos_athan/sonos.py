@@ -206,6 +206,7 @@ class SonosManager:
                     target_ts = trans.get('current_transport_state')
                     if target_ts == 'PLAYING': s.play()
                     elif target_ts == 'PAUSED': s.pause()
+                    else: s.stop()
             except Exception as e:
                 if debug: logger.warning(f"Error restoring playback for {s.player_name}: {e}")
 
