@@ -27,30 +27,47 @@ class SonosManager:
         self.speaker_names = speaker_names
         self.master = None
         self.target_speakers = []
+        self.target_ips = [] # Cache IPs for fast re-discovery
         self.is_playing_athan = False
         self.original_state = {}
 
     def discover_and_group(self, debug=False):
         try:
-            logger.info("Scanning network for Sonos speakers via multicast...")
-            all_speakers = soco.discover(timeout=10)
-            if not all_speakers:
+            potential_speakers = []
+            
+            # Strategy 1: Try cached IPs first (Fast)
+            if self.target_ips:
+                if debug: logger.info(f"Checking cached IPs: {self.target_ips}")
+                for ip in self.target_ips:
+                    try:
+                        s = soco.SoCo(ip)
+                        # Quick check if it's reachable
+                        _ = s.player_name
+                        potential_speakers.append(s)
+                    except:
+                        pass
+            
+            # Strategy 2: Full multicast discovery (Fallback)
+            if not potential_speakers or (self.speaker_names and len(potential_speakers) < len(self.speaker_names)):
+                logger.info("Scanning network for Sonos speakers via multicast...")
+                all_speakers = soco.discover(timeout=10)
+                if all_speakers:
+                    potential_speakers = list(all_speakers)
+            
+            if not potential_speakers:
                 logger.warning("No Sonos speakers found.")
                 return False
 
-            potential_speakers = list(all_speakers)
-            
-            if debug:
-                logger.info(f"Found {len(potential_speakers)} potential devices. Filtering...")
-
             self.target_speakers = []
+            new_ips = []
             for s in potential_speakers:
                 try:
                     name = s.player_name
                     # Always log discovered speakers that match configuration
                     if not self.speaker_names or name in self.speaker_names:
-                        logger.info(f" - Configured Speaker: {name} ({s.ip_address})")
+                        logger.info(f" - Found Configured Speaker: {name} ({s.ip_address})")
                         self.target_speakers.append(s)
+                        new_ips.append(s.ip_address)
                     elif debug:
                         logger.info(f" - Found (unconfigured): {name} ({s.ip_address})")
                 except Exception as e:
@@ -61,32 +78,56 @@ class SonosManager:
                 logger.warning("None of the target speakers were found.")
                 return False
 
+            # Update cache
+            self.target_ips = new_ips
+
+            # Sort to ensure consistent master
             self.target_speakers.sort(key=lambda x: x.ip_address)
             self.master = self.target_speakers[0]
-            logger.info(f"Using {self.master.player_name} ({self.master.ip_address}) as master.")
             
+            # Ensure the group is correctly formed for the announcement
             if len(self.target_speakers) > 1:
-                logger.info(f"Grouping {len(self.target_speakers)} speakers...")
+                logger.info(f"Regrouping {len(self.target_speakers)} speakers to ensure synchronization...")
+                # First, ensure everyone is unjoined from current activities
                 for speaker in self.target_speakers:
-                    if speaker != self.master:
-                        try: speaker.join(self.master)
-                        except Exception as e: logger.error(f"Failed to join {speaker.ip_address}: {e}")
+                    try: speaker.unjoin()
+                    except: pass
+                
+                time.sleep(1) # Wait for unjoin to settle
+
+                # Join everyone to the chosen master
+                for speaker in self.target_speakers:
+                    if speaker.ip_address != self.master.ip_address:
+                        try:
+                            speaker.join(self.master)
+                        except Exception as e:
+                            logger.error(f"Failed to join {speaker.ip_address} to master: {e}")
+                
+                # Critical: Wait for grouping to stabilize before playing
+                time.sleep(2)
+            else:
+                # Single speaker: ensure it's not currently joined to another group
+                try: self.master.unjoin()
+                except: pass
+
+            logger.info(f"Using {self.master.player_name} ({self.master.ip_address}) as group master.")
             return True
         except Exception as e:
-            logger.error(f"Discovery failed: {e}")
+            logger.error(f"Discovery/Grouping failed: {e}")
             return False
 
     def play(self, filename, debug=False):
         global DETECTED_IP
-        if not self.master:
-            if not self.discover_and_group(debug=debug): return
+        
+        # ALWAYS re-verify speakers and regroup before playing to ensure the group hasn't drifted
+        if not self.discover_and_group(debug=debug):
+            return
 
         # Get IP for callback
         callback_ip = MANUAL_IP
         if not callback_ip:
             if not DETECTED_IP:
                 DETECTED_IP = get_local_ip(self.master.ip_address)
-                # Validation check: Ensure auto-detected IP is on the same subnet
                 m_ip = self.master.ip_address
                 if '.'.join(m_ip.split('.')[:-1]) != '.'.join(DETECTED_IP.split('.')[:-1]):
                     logger.warning(f"!!! NETWORK WARNING !!!")
@@ -134,9 +175,7 @@ class SonosManager:
                     if debug: logger.info(f"Current Transport State: {curr_state}")
                     if curr_state not in ['PLAYING', 'TRANSITIONING']:
                         break
-                except:
-                    # Connection might be flaky during group changes
-                    pass
+                except: pass
                 time.sleep(2)
             
             # 5. Restore state
@@ -147,13 +186,12 @@ class SonosManager:
             self.is_playing_athan = False
 
     def restore_state(self, debug=False):
-        # Ensure we don't try to restore twice or if not playing
         if not self.master or not self.original_state:
             return
 
         logger.info("Restoring original Sonos state...")
         try:
-            # Restore Volumes for all speakers
+            # Restore Volumes
             volumes = self.original_state.get('volumes', {})
             for s in self.target_speakers:
                 if s.ip_address in volumes:

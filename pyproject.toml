@@ -7,7 +7,7 @@ name = "sonos-athan"
 version = "1.0.0"
 description = "A 24/7 Sonos Athan player with automated scheduling and state restoration."
 authors = [
-    { name = "Aseef", email = "user@example.com" }
+    { name = "Aseef", email = "contact@aseef.dev" }
 ]
 requires-python = ">=3.14"
 dependencies = [
