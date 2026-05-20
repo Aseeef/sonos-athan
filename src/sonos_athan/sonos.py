@@ -52,10 +52,16 @@ class SonosManager:
             for s in potential_speakers:
                 try:
                     name = s.player_name
+                    # Always log discovered speakers that match configuration
                     if not self.speaker_names or name in self.speaker_names:
+                        logger.info(f" - Configured Speaker: {name} ({s.ip_address})")
                         self.target_speakers.append(s)
                         new_ips.append(s.ip_address)
-                except: continue
+                    elif debug:
+                        logger.info(f" - Found (unconfigured): {name} ({s.ip_address})")
+                except Exception as e:
+                    if debug: logger.warning(f" - Error communicating with {s.ip_address}: {e}")
+                    continue
 
             if not self.target_speakers:
                 logger.warning("None of the target speakers were found.")
@@ -132,26 +138,31 @@ class SonosManager:
                     except: pass
 
             logger.info(f"Playing announcement on {self.master.player_name} group...")
-            self.master.play_uri(uri)
             
-            # 4. WAIT
-            time.sleep(3)
-            max_wait = 300
-            start_wait = time.time()
-            while time.time() - start_wait < max_wait and self.is_playing_athan:
-                try:
-                    curr_state = self.master.get_current_transport_info().get('current_transport_state')
-                    if debug: logger.info(f"State: {curr_state}")
-                    if curr_state not in ['PLAYING', 'TRANSITIONING']: break
-                except: pass
-                time.sleep(2)
-            
-            # 5. RESTORE
-            self.restore_state(debug=debug)
+            try:
+                self.master.play_uri(uri)
+                
+                # 4. WAIT
+                time.sleep(3)
+                max_wait = 300
+                start_wait = time.time()
+                while time.time() - start_wait < max_wait and self.is_playing_athan:
+                    try:
+                        curr_state = self.master.get_current_transport_info().get('current_transport_state')
+                        if debug: logger.info(f"State: {curr_state}")
+                        if curr_state not in ['PLAYING', 'TRANSITIONING']: break
+                    except: pass
+                    if self.is_playing_athan:
+                        time.sleep(2)
+            except Exception as playback_err:
+                logger.error(f"Playback command failed: {playback_err}")
                 
         except Exception as e:
-            logger.error(f"Playback failed: {e}")
-            self.is_playing_athan = False
+            logger.error(f"Unexpected error in play sequence: {e}")
+        finally:
+            # 5. ALWAYS RESTORE
+            self.is_playing_athan = False # Ensure loop breaks if it hasn't
+            self.restore_state(debug=debug)
 
     def restore_state(self, debug=False):
         if not self.original_states:
@@ -171,10 +182,8 @@ class SonosManager:
                 # Restore Group status
                 orig_coord_ip = state['original_coordinator_ip']
                 if orig_coord_ip == s.ip_address:
-                    # They were a coordinator or standalone
                     s.unjoin()
                 else:
-                    # They were a follower, try to re-join their original leader
                     try:
                         coord = soco.SoCo(orig_coord_ip)
                         s.join(coord)
@@ -210,5 +219,4 @@ class SonosManager:
             except Exception as e:
                 if debug: logger.warning(f"Error restoring playback for {s.player_name}: {e}")
 
-        self.is_playing_athan = False
         self.original_states = {}

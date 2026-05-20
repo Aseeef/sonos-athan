@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 # Load environment variables from .env file if it exists
 load_dotenv()
 
+import soco
+# Set global network timeout for all Sonos interactions (seconds)
+soco.config.NETWORK_TIMEOUT = 5.0
+
 # --- Core Configuration ---
 LATITUDE = float(os.getenv('LATITUDE', '40.7128'))
 LONGITUDE = float(os.getenv('LONGITUDE', '-74.0060'))

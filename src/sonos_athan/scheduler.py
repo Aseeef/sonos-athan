@@ -33,36 +33,44 @@ class AthanScheduler:
         today = now_local.date()
         if self.current_day != today:
             logger.info(f"Calculating prayer times for {today} in {TIMEZONE}...")
-            calc_method = self.get_calc_method()
-            madhab = self.get_madhab()
-            params = CalculationParameters(method=calc_method)
-            params.madhab = madhab
-            
-            times = PrayerTimes((LATITUDE, LONGITUDE), now_local, calculation_parameters=params, time_zone=self.local_tz)
-            
-            tomorrow_local = now_local + timedelta(days=1)
-            tomorrow_times = PrayerTimes((LATITUDE, LONGITUDE), tomorrow_local, calculation_parameters=params, time_zone=self.local_tz)
-            
-            maghrib = times.maghrib
-            next_fajr = tomorrow_times.fajr
-            duration = next_fajr - maghrib
-            midnight = maghrib + (duration / 2)
-            
-            self.prayer_times = {
-                "Fajr": times.fajr,
-                "Sunrise": times.sunrise,
-                "Dhuhr": times.dhuhr,
-                "Asr": times.asr,
-                "Maghrib": times.maghrib,
-                "Isha": times.isha,
-                "Midnight": midnight
-            }
-            self.current_day = today
-            for name, t in self.prayer_times.items():
-                logger.info(f"{name}: {t.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            try:
+                calc_method = self.get_calc_method()
+                madhab = self.get_madhab()
+                params = CalculationParameters(method=calc_method)
+                params.madhab = madhab
+                
+                # Get times for today
+                times = PrayerTimes((LATITUDE, LONGITUDE), now_local, calculation_parameters=params, time_zone=self.local_tz)
+                
+                # Midnight calculation requires tomorrow's Fajr
+                tomorrow_local = now_local + timedelta(days=1)
+                tomorrow_times = PrayerTimes((LATITUDE, LONGITUDE), tomorrow_local, calculation_parameters=params, time_zone=self.local_tz)
+                
+                maghrib = times.maghrib
+                next_fajr = tomorrow_times.fajr
+                duration = next_fajr - maghrib
+                midnight = maghrib + (duration / 2)
+                
+                self.prayer_times = {
+                    "Fajr": times.fajr,
+                    "Sunrise": times.sunrise,
+                    "Dhuhr": times.dhuhr,
+                    "Asr": times.asr,
+                    "Maghrib": times.maghrib,
+                    "Isha": times.isha,
+                    "Midnight": midnight
+                }
+                self.current_day = today
+                for name, t in self.prayer_times.items():
+                    logger.info(f"{name}: {t.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                return True
+            except Exception as e:
+                logger.error(f"Error calculating prayer times: {e}. Will retry in 1 minute.")
+                return False
+        return True
 
     def run(self):
-        # Initial discovery to list configured speakers on startup
+        # Initial discovery
         logger.info("Performing initial Sonos discovery...")
         self.sonos.discover_and_group(debug=self.debug)
 
@@ -71,7 +79,11 @@ class AthanScheduler:
             threading.Thread(target=self.sonos.play, args=(ATHAN_FILENAME, True), daemon=True).start()
 
         while not self.stop_event.is_set():
-            self.update_times()
+            if not self.update_times():
+                # If calculation failed (e.g. internet blip), wait a bit and retry the loop
+                self.stop_event.wait(60)
+                continue
+
             now = datetime.now(self.local_tz)
             events = []
             for name, p_time in self.prayer_times.items():
@@ -84,13 +96,13 @@ class AthanScheduler:
                         reminder_time = p_time - timedelta(minutes=minutes)
                         events.append((reminder_time, "reminder", name, minutes))
 
+            # Filter for future events only
             future_events = sorted([e for e in events if e[0] > now], key=lambda x: x[0])
 
             if not future_events:
-                tomorrow_midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), tzinfo=self.local_tz)
-                wait_seconds = (tomorrow_midnight - now).total_seconds() + 5
-                logger.info(f"Sleeping until tomorrow...")
-                if self.stop_event.wait(wait_seconds): break
+                # End of day, wait for midnight calculation in next loop
+                logger.info("No more events today. Waiting for tomorrow...")
+                self.stop_event.wait(60)
                 continue
 
             next_event = future_events[0]
@@ -99,10 +111,20 @@ class AthanScheduler:
             prayer_name = next_event[2]
             
             wait_seconds = (next_event_time - now).total_seconds()
-            logger.info(f"Next: {event_type} for {prayer_name} at {next_event_time.strftime('%H:%M:%S')} (in {wait_seconds:.0f}s)")
             
-            if self.stop_event.wait(wait_seconds): break
+            # Instead of one long sleep, sleep in 30s chunks
+            # to handle system clock drift (NTP jumps) and signal responsiveness.
+            if wait_seconds > 30:
+                if self.debug: logger.info(f"Waiting for {prayer_name} ({event_type}) in {wait_seconds:.0f}s...")
+                self.stop_event.wait(30)
+                continue # Re-check everything in the next loop iteration
+
+            # We are within 30 seconds of the event - perform final precision wait
+            if wait_seconds > 0:
+                if self.stop_event.wait(wait_seconds): break
             
+            # Execute event
+            logger.info(f"Executing: {event_type} for {prayer_name}")
             if event_type == "athan":
                 if prayer_name in PLAY_ATHAN_FOR:
                     file = FAJR_ATHAN_FILENAME if prayer_name == "Fajr" else ATHAN_FILENAME
@@ -111,14 +133,12 @@ class AthanScheduler:
                     msg = f"{prayer_name} prayer time has started"
                     self.sonos.play(generate_reminder(prayer_name, 0, custom_text=msg), debug=self.debug)
             elif event_type == "announcement":
-                custom_text = next_event[3]
-                self.sonos.play(generate_reminder(prayer_name, 0, custom_text=custom_text), debug=self.debug)
+                self.sonos.play(generate_reminder(prayer_name, 0, custom_text=next_event[3]), debug=self.debug)
             else:
-                reminder_mins = next_event[3]
-                self.sonos.play(generate_reminder(prayer_name, reminder_mins), debug=self.debug)
+                self.sonos.play(generate_reminder(prayer_name, next_event[3]), debug=self.debug)
 
     def shutdown(self):
-        logger.info("Shutting down scheduler and cleaning up Sonos...")
+        logger.info("Shutting down scheduler...")
         self.stop_event.set()
         if self.sonos.is_playing_athan:
             self.sonos.restore_state(debug=self.debug)
