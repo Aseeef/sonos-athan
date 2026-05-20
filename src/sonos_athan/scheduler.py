@@ -19,6 +19,7 @@ class AthanScheduler:
         self.debug = debug
         self.stop_event = threading.Event()
         self.local_tz = ZoneInfo(TIMEZONE)
+        self.last_logged_event = None
 
     def get_calc_method(self):
         method = getattr(CalculationMethod, CALCULATION_METHOD, None)
@@ -109,15 +110,21 @@ class AthanScheduler:
             next_event_time = next_event[0]
             event_type = next_event[1]
             prayer_name = next_event[2]
-            
+
             wait_seconds = (next_event_time - now).total_seconds()
-            
-            # Instead of one long sleep, sleep in 30s chunks
+
+            # Log the next event if it has changed or we are close to it
+            event_id = f"{event_type}_{prayer_name}_{next_event_time.timestamp()}"
+            if self.last_logged_event != event_id or wait_seconds <= 30:
+                logger.info(f"Next: {event_type} for {prayer_name} at {next_event_time.strftime('%H:%M:%S')} (in {wait_seconds:.0f}s)")
+                self.last_logged_event = event_id
+
+            # 24/7 Stability Fix: Instead of one long sleep, sleep in 30s chunks
             # to handle system clock drift (NTP jumps) and signal responsiveness.
             if wait_seconds > 30:
-                if self.debug: logger.info(f"Waiting for {prayer_name} ({event_type}) in {wait_seconds:.0f}s...")
                 self.stop_event.wait(30)
                 continue # Re-check everything in the next loop iteration
+
 
             # We are within 30 seconds of the event - perform final precision wait
             if wait_seconds > 0:
