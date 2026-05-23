@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from sonos_athan.sonos import SonosManager
+from sonos_athan.sonos import SonosManager, SpeakerState
 
 @pytest.fixture
 def manager():
@@ -11,30 +11,28 @@ def test_state_restoration_with_failures(manager, mocker):
     # Create two mock speakers
     s1 = MagicMock(name="Speaker1")
     s1.ip_address = "192.168.1.10"
-    s1.player_name = "Living Room"
     
     s2 = MagicMock(name="Speaker2")
     s2.ip_address = "192.168.1.11"
-    s2.player_name = "Kitchen"
     
     manager.target_speakers = [s1, s2]
     
-    # Define a state where s1 fails during volume restoration
+    # Define a state where s1 fails
     manager.original_states = {
-        "192.168.1.10": {
-            'volume': 20, 
-            'original_coordinator_ip': "192.168.1.10", 
-            'is_coordinator': True,
-            'track_info': {'uri': 'x-rincon:abc'},
-            'transport_info': {'current_transport_state': 'PLAYING'}
-        },
-        "192.168.1.11": {
-            'volume': 15, 
-            'original_coordinator_ip': "192.168.1.11", 
-            'is_coordinator': True,
-            'track_info': None,
-            'transport_info': None
-        }
+        "192.168.1.10": SpeakerState(
+            name="Living Room",
+            volume=20, 
+            original_coordinator_ip="192.168.1.10", 
+            is_coordinator=True,
+            track_info={'uri': 'x-rincon:abc'},
+            transport_info={'current_transport_state': 'PLAYING'}
+        ),
+        "192.168.1.11": SpeakerState(
+            name="Kitchen",
+            volume=15, 
+            original_coordinator_ip="192.168.1.11", 
+            is_coordinator=True
+        )
     }
     
     # Mock property setting failure for s1
@@ -44,12 +42,11 @@ def test_state_restoration_with_failures(manager, mocker):
     manager.restore_state()
     
     # Verify s2 was still processed
-    s2.volume = 15 # Check that the setter was called
+    s2.volume = 15
     assert s2.unjoin.called
 
 def test_complex_group_restoration(manager, mocker):
     """Test restoring a setup where speakers were originally in different groups."""
-    # s1/s2 were grouped together, s3 was standalone
     s1 = MagicMock(name="Coord1")
     s1.ip_address = "1.1.1.1"
     s2 = MagicMock(name="Follower1")
@@ -59,9 +56,9 @@ def test_complex_group_restoration(manager, mocker):
     
     manager.target_speakers = [s1, s2, s3]
     manager.original_states = {
-        "1.1.1.1": {'volume': 10, 'is_coordinator': True, 'original_coordinator_ip': "1.1.1.1", 'track_info': {'uri': 'uri1'}, 'transport_info': {'current_transport_state': 'PLAYING'}},
-        "1.1.1.2": {'volume': 10, 'is_coordinator': False, 'original_coordinator_ip': "1.1.1.1", 'track_info': None, 'transport_info': None},
-        "1.1.1.3": {'volume': 20, 'is_coordinator': True, 'original_coordinator_ip': "1.1.1.3", 'track_info': {'uri': 'uri2'}, 'transport_info': {'current_transport_state': 'STOPPED'}}
+        "1.1.1.1": SpeakerState(name="S1", volume=10, is_coordinator=True, original_coordinator_ip="1.1.1.1", track_info={'uri': 'uri1'}, transport_info={'current_transport_state': 'PLAYING'}),
+        "1.1.1.2": SpeakerState(name="S2", volume=10, is_coordinator=False, original_coordinator_ip="1.1.1.1"),
+        "1.1.1.3": SpeakerState(name="S3", volume=20, is_coordinator=True, original_coordinator_ip="1.1.1.3", track_info={'uri': 'uri2'}, transport_info={'current_transport_state': 'STOPPED'})
     }
     
     # Mock SoCo class to return our mocks based on IP
