@@ -1,10 +1,22 @@
 import time
 import socket
 import soco
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
 from .config import logger, SONOS_SPEAKER_NAMES, ATHAN_VOLUME, SERVER_PORT, MANUAL_IP
 
 # Globals for dynamic detection
 DETECTED_IP = None
+
+@dataclass
+class SpeakerState:
+    """Structured container for original speaker state before an announcement."""
+    name: str
+    volume: int
+    is_coordinator: bool
+    original_coordinator_ip: str
+    transport_info: Optional[Dict[str, Any]] = None
+    track_info: Optional[Dict[str, Any]] = None
 
 def get_local_ip(target_ip=None):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -21,19 +33,25 @@ def get_local_ip(target_ip=None):
 class SonosManager:
     def __init__(self, speaker_names=SONOS_SPEAKER_NAMES):
         self.speaker_names = speaker_names
-        self.master = None
-        self.target_speakers = []
-        self.target_ips = []
+        self.master: Optional[soco.SoCo] = None
+        self.target_speakers: List[soco.SoCo] = []
+        self.target_ips: List[str] = []
         self.is_playing_athan = False
-        self.original_states = {} # Store state per speaker/group
+        self.original_states: Dict[str, SpeakerState] = {}
+        self._name_cache: Dict[str, str] = {} # Explicit cache for speaker names
 
-    def discover_and_group(self, debug=False):
+    def _get_safe_name(self, speaker: soco.SoCo) -> str:
+        """Returns the cached name or IP if cache is empty, avoiding network calls."""
+        return self._name_cache.get(speaker.ip_address, speaker.ip_address)
+
+    def discover_and_group(self, debug=False) -> bool:
         try:
             potential_speakers = []
             if self.target_ips:
                 for ip in self.target_ips:
                     try:
                         s = soco.SoCo(ip)
+                        # Test if reachable
                         _ = s.player_name
                         potential_speakers.append(s)
                     except: pass
@@ -52,9 +70,10 @@ class SonosManager:
             for s in potential_speakers:
                 try:
                     name = s.player_name
-                    # Always log discovered speakers that match configuration
+                    self._name_cache[s.ip_address] = name # Explicitly cache
+                    
                     if not self.speaker_names or name in self.speaker_names:
-                        logger.info(f" - Configured Speaker: {name} ({s.ip_address})")
+                        logger.info(f" - Found Configured Speaker: {name} ({s.ip_address})")
                         self.target_speakers.append(s)
                         new_ips.append(s.ip_address)
                     elif debug:
@@ -89,32 +108,37 @@ class SonosManager:
         
         try:
             # 1. SAVE COMPREHENSIVE STATE
-            # We save the grouping and playback state for EVERY target speaker
             self.original_states = {}
+            active_speakers = []
+            
             for s in self.target_speakers:
+                s_name = self._get_safe_name(s)
                 try:
-                    # Capture if this speaker was a coordinator of its own group
                     is_coord = s.is_coordinator
                     coord_ip = s.group.coordinator.ip_address
                     
-                    state = {
-                        'volume': s.volume,
-                        'is_coordinator': is_coord,
-                        'original_coordinator_ip': coord_ip,
-                        'transport_info': None,
-                        'track_info': None
-                    }
-                    
-                    # If it was a coordinator, save what it was playing
-                    if is_coord:
-                        state['transport_info'] = s.get_current_transport_info()
-                        state['track_info'] = s.get_current_track_info()
+                    state = SpeakerState(
+                        name=s_name,
+                        volume=s.volume,
+                        is_coordinator=is_coord,
+                        original_coordinator_ip=coord_ip,
+                        transport_info=s.get_current_transport_info() if is_coord else None,
+                        track_info=s.get_current_track_info() if is_coord else None
+                    )
                     
                     self.original_states[s.ip_address] = state
+                    active_speakers.append(s)
                 except Exception as e:
-                    logger.warning(f"Could not capture state for {s.player_name}: {e}")
+                    logger.warning(f"Could not capture state for {s_name}, skipping speaker: {e}")
 
-            if debug: logger.info(f"Captured state for {len(self.original_states)} speakers.")
+            if not active_speakers:
+                logger.error("No speakers responded to state capture. Aborting playback.")
+                return
+
+            self.target_speakers = active_speakers
+            # Use IP comparison for master validation
+            if not self.master or self.master.ip_address not in [s.ip_address for s in self.target_speakers]:
+                self.master = self.target_speakers[0]
 
             # 2. GROUP FOR ATHAN
             if len(self.target_speakers) > 1:
@@ -126,8 +150,11 @@ class SonosManager:
                 for speaker in self.target_speakers:
                     if speaker.ip_address != self.master.ip_address:
                         try: speaker.join(self.master)
-                        except: pass
-                time.sleep(2)
+                        except Exception as e:
+                            logger.warning(f"Failed to join {self._get_safe_name(speaker)} to group: {e}")
+                
+                # Wait for group coordinator to settle
+                time.sleep(3)
 
             self.is_playing_athan = True
 
@@ -137,7 +164,7 @@ class SonosManager:
                     try: s.volume = ATHAN_VOLUME
                     except: pass
 
-            logger.info(f"Playing announcement on {self.master.player_name} group...")
+            logger.info(f"Playing announcement on {self._get_safe_name(self.master)} group...")
             
             try:
                 self.master.play_uri(uri)
@@ -155,13 +182,12 @@ class SonosManager:
                     if self.is_playing_athan:
                         time.sleep(2)
             except Exception as playback_err:
-                logger.error(f"Playback command failed: {playback_err}")
+                logger.error(f"Playback command failed on master {self._get_safe_name(self.master)}: {playback_err}")
                 
         except Exception as e:
             logger.error(f"Unexpected error in play sequence: {e}")
         finally:
-            # 5. ALWAYS RESTORE
-            self.is_playing_athan = False # Ensure loop breaks if it hasn't
+            self.is_playing_athan = False
             self.restore_state(debug=debug)
 
     def restore_state(self, debug=False):
@@ -175,33 +201,32 @@ class SonosManager:
             state = self.original_states.get(s.ip_address)
             if not state: continue
             
+            s_name = state.name
             try:
-                # Restore volume first so it's quiet/correct before music starts
-                s.volume = state['volume']
+                s.volume = state.volume
                 
-                # Restore Group status
-                orig_coord_ip = state['original_coordinator_ip']
-                if orig_coord_ip == s.ip_address:
+                if state.original_coordinator_ip == s.ip_address:
                     s.unjoin()
                 else:
                     try:
-                        coord = soco.SoCo(orig_coord_ip)
+                        coord = soco.SoCo(state.original_coordinator_ip)
                         s.join(coord)
                     except:
                         s.unjoin()
             except Exception as e:
-                if debug: logger.warning(f"Error restoring basic state for {s.player_name}: {e}")
+                if debug: logger.warning(f"Error restoring basic state for {s_name}: {e}")
 
-        time.sleep(2) # Wait for regrouping to settle
+        time.sleep(2)
 
         # Step B: Restore Playback for the coordinators
         for s in self.target_speakers:
             state = self.original_states.get(s.ip_address)
-            if not state or not state['is_coordinator']: continue
+            if not state or not state.is_coordinator: continue
             
             try:
-                track = state['track_info']
-                trans = state['transport_info']
+                s_name = state.name
+                track = state.track_info
+                trans = state.transport_info
                 
                 if track and track.get('uri'):
                     try:
@@ -214,9 +239,9 @@ class SonosManager:
                 if trans:
                     target_ts = trans.get('current_transport_state')
                     if target_ts == 'PLAYING': s.play()
-                    elif target_ts == 'PAUSED': s.pause()
+                    elif target_ts == 'PAUSED_PLAYBACK': s.pause()
                     else: s.stop()
             except Exception as e:
-                if debug: logger.warning(f"Error restoring playback for {s.player_name}: {e}")
+                if debug: logger.warning(f"Error restoring playback for {s_name}: {e}")
 
         self.original_states = {}
